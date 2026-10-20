@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SriGok's family ledger</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen antialiased selection:bg-blue-100" x-data="omniApp()" x-init="init()">
+
+  <!-- 1. PIN Lock Screen -->
+  <div x-show="!isAuthenticated" class="fixed inset-0 z-50 bg-slate-200/90 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white border border-slate-300 p-8 rounded-2xl max-w-sm w-full text-center space-y-5 shadow-xl">
+      <div class="w-14 h-14 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto text-2xl font-bold border border-blue-100 shadow-inner">🔒</div>
+      <div>
+        <h2 class="text-xl font-bold text-slate-900">Security Lock</h2>
+        <p class="text-xs text-slate-500 mt-1">Enter your 6-digit access PIN</p>
+      </div>
+      <input type="password" maxlength="6" x-model="inputPin" @keyup.enter="verifyPin" placeholder="••••••" 
+             class="tracking-widest text-center text-3xl font-mono py-2.5 bg-slate-50 border border-slate-300 rounded-xl w-full text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <div x-show="pinError" class="text-xs text-rose-600 font-medium">Incorrect PIN. Try again.</div>
+      <button @click="verifyPin" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition shadow-sm">Unlock Ledger</button>
+    </div>
+  </div>
+
+  <!-- 2. Edit Modal -->
+  <div x-show="editingItem !== null" x-cloak class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white border border-slate-300 p-6 rounded-2xl max-w-md w-full space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center border-b border-slate-200 pb-3">
+        <h3 class="text-base font-bold text-slate-900">Edit Line Item</h3>
+        <button @click="editingItem = null" class="text-slate-400 hover:text-slate-700 text-lg">✕</button>
+      </div>
+      <template x-if="editingItem">
+        <div class="space-y-3 text-xs">
+          <div>
+            <label class="text-slate-600 font-semibold block mb-1">Product Name</label>
+            <input type="text" x-model="editingItem.name" class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-slate-600 font-semibold block mb-1">Price (₹)</label>
+              <input type="number" step="0.01" x-model.number="editingItem.price" class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="text-slate-600 font-semibold block mb-1">Quantity</label>
+              <input type="number" x-model.number="editingItem.quantity" class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-slate-600 font-semibold block mb-1">Date</label>
+              <input type="date" x-model="editingItem.date" class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="text-slate-600 font-semibold block mb-1">Store / Merchant</label>
+              <input type="text" x-model="editingItem.store" class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            </div>
+          </div>
+          <div>
+            <label class="text-slate-600 font-semibold block mb-1">Category</label>
+            <select x-model="editingItem.category" class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500">
+              <option value="Groceries">Groceries</option>
+              <option value="Dining">Dining</option>
+              <option value="Utilities">Utilities</option>
+              <option value="Transport">Transport</option>
+              <option value="Electronics">Electronics</option>
+              <option value="Misc">Misc</option>
+            </select>
+          </div>
+          <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button @click="editingItem = null" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium">Cancel</button>
+            <button @click="saveEdit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-sm">Save Changes</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 3. Main Interface -->
+  <div x-show="isAuthenticated" class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+    
+    <!-- Header -->
+    <header class="bg-white border border-slate-200 p-5 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-sm">
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-xl font-bold text-slate-900 tracking-tight">SriGok's family ledger</h1>
+          <span class="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-semibold uppercase tracking-wider">Cloud Connected</span>
+        </div>
+        <p class="text-xs text-slate-500 mt-0.5">Real-time sync across mobile, laptop & smart TV</p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+        <input type="text" x-model="syncUrl" @change="saveConfig" placeholder="Google Apps Script /exec URL" 
+               class="bg-slate-50 border border-slate-300 px-3 py-1.5 rounded-lg text-xs w-full md:w-72 focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-800">
+        <button @click="fetchCloudData" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-lg border border-slate-300 transition font-medium">↻ Sync</button>
+        <button @click="lockApp" class="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs px-3 py-1.5 rounded-lg transition font-medium">Lock</button>
+      </div>
+    </header>
+
+    <!-- Scan & Input Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <!-- 1. Mobile Camera / Photo -->
+      <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm flex flex-col justify-between">
+        <div>
+          <div class="text-sm font-semibold text-slate-900">📸 Scan Receipt</div>
+          <p class="text-xs text-slate-500 mt-1">Triggers camera on phone or scans receipt photo via OCR.</p>
+        </div>
+        <div class="mt-4">
+          <input type="file" accept="image/*" capture="environment" @change="processImage" id="camInput" class="hidden">
+          <label for="camInput" class="cursor-pointer block text-center py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition shadow-sm">
+            Snap / Select Photo
+          </label>
+        </div>
+      </div>
+
+      <!-- 2. PDF Digital Invoices -->
+      <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm flex flex-col justify-between">
+        <div>
+          <div class="text-sm font-semibold text-slate-900">📄 Digital PDF Bill</div>
+          <p class="text-xs text-slate-500 mt-1">Reads text tables from PDF invoices instantly.</p>
+        </div>
+        <div class="mt-4">
+          <input type="file" accept="application/pdf" @change="processPDF" id="pdfInput" class="hidden">
+          <label for="pdfInput" class="cursor-pointer block text-center py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition shadow-sm">
+            Upload PDF
+          </label>
+        </div>
+      </div>
+
+      <!-- 3. Manual Quick Entry -->
+      <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm flex flex-col justify-between">
+        <div>
+          <div class="text-sm font-semibold text-slate-900">✍️ Quick Manual Entry</div>
+          <p class="text-xs text-slate-500 mt-1">Add a quick expense without scanning a file.</p>
+        </div>
+        <div class="mt-4">
+          <button @click="quickAddPrompt" class="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-lg text-xs font-medium transition">
+            + Add Line Item
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Processing Feedback Bar -->
+    <div x-show="isProcessing" class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-700 flex items-center gap-2 shadow-sm">
+      <span class="animate-pulse">●</span> <span x-text="statusText"></span>
+    </div>
+
+    <!-- Staging / Review Area -->
+    <div x-show="stagedItems.length > 0" class="bg-amber-50 border border-amber-200 p-5 rounded-2xl space-y-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-bold text-amber-900">Review Items Before Saving</h3>
+          <p class="text-xs text-amber-700">Verify extracted names and amounts before pushing to cloud</p>
+        </div>
+        <div class="flex gap-2">
+          <button @click="stagedItems = []" class="px-3 py-1 bg-white border border-amber-300 text-amber-800 text-xs rounded hover:bg-amber-100">Discard</button>
+          <button @click="saveStagedToCloud" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded shadow-sm">Commit to Cloud</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto bg-white rounded-xl border border-amber-200">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="border-b border-slate-200 text-slate-500 bg-slate-50">
+              <th class="p-2.5">Product</th>
+              <th class="p-2.5 w-20 text-center">Qty</th>
+              <th class="p-2.5 w-28 text-right">Price (₹)</th>
+              <th class="p-2.5 w-32">Category</th>
+              <th class="p-2.5 w-10"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <template x-for="(item, idx) in stagedItems" :key="idx">
+              <tr>
+                <td class="p-2"><input type="text" x-model="item.name" class="w-full bg-slate-50 px-2 py-1 rounded border border-slate-200 text-slate-800"></td>
+                <td class="p-2 text-center"><input type="number" x-model.number="item.quantity" class="w-16 bg-slate-50 px-2 py-1 rounded border border-slate-200 text-center text-slate-800"></td>
+                <td class="p-2 text-right"><input type="number" step="0.01" x-model.number="item.price" class="w-24 bg-slate-50 px-2 py-1 rounded border border-slate-200 text-right text-slate-800"></td>
+                <td class="p-2">
+                  <select x-model="item.category" class="bg-slate-50 px-2 py-1 rounded border border-slate-200 text-xs text-slate-800">
+                    <option value="Groceries">Groceries</option>
+                    <option value="Dining">Dining</option>
+                    <option value="Utilities">Utilities</option>
+                    <option value="Transport">Transport</option>
+                    <option value="Electronics">Electronics</option>
+                    <option value="Misc">Misc</option>
+                  </select>
+                </td>
+                <td class="p-2 text-center">
+                  <button @click="stagedItems.splice(idx, 1)" class="text-rose-600 font-bold hover:text-rose-800">✕</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Monthly Comparison Graph Section -->
+    <div class="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-bold text-slate-900">📊 Monthly Expenditure Comparison</h3>
+        <span class="text-xs text-slate-500 font-medium">Month-over-month totals</span>
+      </div>
+      <div class="h-64 w-full">
+        <canvas id="monthlyChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Period Filter & Breakdown Controls -->
+    <div class="bg-white border border-slate-200 p-5 rounded-2xl space-y-4 shadow-sm">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div>
+          <h3 class="text-sm font-bold text-slate-900">🔍 Detailed Expenditure Breakdown</h3>
+          <p class="text-xs text-slate-500">Filter period to view rollups and itemized rows</p>
+        </div>
+        <!-- Time Filter Selector -->
+        <div class="flex flex-wrap items-center gap-2">
+          <select x-model="selectedPeriod" @change="applyPeriodFilter" class="bg-slate-50 border border-slate-300 text-xs px-3 py-1.5 rounded-lg text-slate-800 focus:outline-none">
+            <option value="today">Today</option>
+            <option value="week">Last 7 Days</option>
+            <option value="this_month">This Month</option>
+            <option value="last_month">Last Month</option>
+            <option value="all">All Time</option>
+            <option value="custom">Custom Range</option>
+          </select>
+          <div x-show="selectedPeriod === 'custom'" class="flex items-center gap-1.5">
+            <input type="date" x-model="customStart" @change="applyPeriodFilter" class="bg-slate-50 border border-slate-300 text-xs px-2 py-1 rounded text-slate-800">
+            <span class="text-xs text-slate-400">to</span>
+            <input type="date" x-model="customEnd" @change="applyPeriodFilter" class="bg-slate-50 border border-slate-300 text-xs px-2 py-1 rounded text-slate-800">
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Metrics Cards -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="bg-slate-50 border border-slate-200 p-4 rounded-xl">
+          <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total Spend</span>
+          <div class="text-xl font-bold text-emerald-600 mt-1" x-text="'₹' + periodTotal.toFixed(2)"></div>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 p-4 rounded-xl">
+          <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Items Bought</span>
+          <div class="text-xl font-bold text-slate-900 mt-1" x-text="periodItemCount"></div>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 p-4 rounded-xl">
+          <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Top Category</span>
+          <div class="text-xl font-bold text-blue-600 mt-1 truncate" x-text="topCategory"></div>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 p-4 rounded-xl">
+          <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Transactions</span>
+          <div class="text-xl font-bold text-slate-900 mt-1" x-text="filteredLedger.length"></div>
+        </div>
+      </div>
+
+      <!-- Itemized Ledger Table -->
+      <div class="overflow-x-auto border-t border-slate-100 pt-3">
+        <table class="w-full text-left text-xs">
+          <thead class="text-slate-500 uppercase tracking-wider text-[10px] bg-slate-50/70">
+            <tr>
+              <th class="p-3">Date</th>
+              <th class="p-3">Store</th>
+              <th class="p-3">Item Name</th>
+              <th class="p-3">Category</th>
+              <th class="p-3 text-right">Qty</th>
+              <th class="p-3 text-right">Price</th>
+              <th class="p-3 text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <template x-for="item in filteredLedger" :key="item.id">
+              <tr class="hover:bg-slate-50 transition">
+                <td class="p-3 text-slate-500 font-mono" x-text="item.date"></td>
+                <td class="p-3 font-semibold text-slate-700" x-text="item.store"></td>
+                <td class="p-3 text-slate-900 font-medium" x-text="item.name"></td>
+                <td class="p-3"><span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-medium border border-slate-200" x-text="item.category"></span></td>
+                <td class="p-3 text-right text-slate-600" x-text="item.quantity"></td>
+                <td class="p-3 text-right font-bold text-slate-900" x-text="'₹' + Number(item.price).toFixed(2)"></td>
+                <td class="p-3 text-center space-x-2">
+                  <button @click="openEditModal(item)" class="text-blue-600 hover:text-blue-800 font-semibold px-1 py-0.5" title="Edit">✎</button>
+                  <button @click="deleteItem(item.id)" class="text-rose-600 hover:text-rose-800 font-semibold px-1 py-0.5" title="Delete">✕</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="filteredLedger.length === 0">
+              <td colspan="7" class="p-8 text-center text-slate-400">No transactions match the selected period.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    function omniApp() {
+      return {
+        masterPin: '727810',
+        inputPin: '',
+        isAuthenticated: false,
+        pinError: false,
+        syncUrl: '',
+        isProcessing: false,
+        statusText: '',
+        stagedItems: [],
+        ledger: [],
+        filteredLedger: [],
+        selectedPeriod: 'this_month',
+        customStart: '',
+        customEnd: '',
+        chartInstance: null,
+        editingItem: null,
+
+        init() {
+          this.syncUrl = localStorage.getItem('omni_sync_url') || '';
+          this.ledger = JSON.parse(localStorage.getItem('omni_local_ledger') || '[]');
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        },
+
+        verifyPin() {
+          if (this.inputPin === this.masterPin) {
+            this.isAuthenticated = true;
+            this.pinError = false;
+            this.inputPin = '';
+            this.$nextTick(() => {
+              this.applyPeriodFilter();
+              this.renderMonthlyChart();
+              if (this.syncUrl) this.fetchCloudData();
+            });
+          } else {
+            this.pinError = true;
+            this.inputPin = '';
+          }
+        },
+
+        lockApp() {
+          this.isAuthenticated = false;
+        },
+
+        saveConfig() {
+          localStorage.setItem('omni_sync_url', this.syncUrl);
+        },
+
+        openEditModal(item) {
+          this.editingItem = JSON.parse(JSON.stringify(item));
+        },
+
+        saveEdit() {
+          if (!this.editingItem) return;
+          const idx = this.ledger.findIndex(i => i.id === this.editingItem.id);
+          if (idx !== -1) {
+            this.ledger[idx] = { ...this.editingItem };
+            localStorage.setItem('omni_local_ledger', JSON.stringify(this.ledger));
+            this.applyPeriodFilter();
+            this.renderMonthlyChart();
+            this.syncFullLedgerToCloud();
+          }
+          this.editingItem = null;
+        },
+
+        deleteItem(id) {
+          if (confirm('Delete this item from ledger?')) {
+            this.ledger = this.ledger.filter(i => i.id !== id);
+            localStorage.setItem('omni_local_ledger', JSON.stringify(this.ledger));
+            this.applyPeriodFilter();
+            this.renderMonthlyChart();
+            this.syncFullLedgerToCloud();
+          }
+        },
+
+        async syncFullLedgerToCloud() {
+          if (!this.syncUrl) return;
+          try {
+            await fetch(this.syncUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                pin: this.masterPin,
+                action: 'overwrite_all',
+                items: this.ledger
+              })
+            });
+          } catch (e) {
+            console.error('Failed to sync changes to cloud:', e);
+          }
+        },
+
+        async fetchCloudData() {
+          if (!this.syncUrl) return;
+          this.isProcessing = true;
+          this.statusText = 'Syncing from Google Sheets...';
+          try {
+            const res = await fetch(`${this.syncUrl}?pin=${this.masterPin}`);
+            const json = await res.json();
+            if (json.status === 'success' && Array.isArray(json.data)) {
+              this.ledger = json.data;
+              localStorage.setItem('omni_local_ledger', JSON.stringify(this.ledger));
+              this.applyPeriodFilter();
+              this.renderMonthlyChart();
+            }
+          } catch (e) {
+            console.error(e);
+          } finally {
+            this.isProcessing = false;
+          }
+        },
+
+        async saveStagedToCloud() {
+          const payload = {
+            pin: this.masterPin,
+            items: this.stagedItems
+          };
+
+          this.ledger.unshift(...this.stagedItems);
+          localStorage.setItem('omni_local_ledger', JSON.stringify(this.ledger));
+          this.stagedItems = [];
+          this.applyPeriodFilter();
+          this.renderMonthlyChart();
+
+          if (!this.syncUrl) return;
+          this.isProcessing = true;
+          this.statusText = 'Uploading to Google Sheets...';
+          try {
+            await fetch(this.syncUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+          } catch (e) {
+            console.error('Cloud sync error:', e);
+          } finally {
+            this.isProcessing = false;
+          }
+        },
+
+        async processImage(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          this.isProcessing = true;
+          this.statusText = 'Scanning image locally with OCR...';
+
+          try {
+            const worker = await Tesseract.createWorker('eng', 1);
+            const ret = await worker.recognize(file);
+            await worker.terminate();
+            this.parseRawText(ret.data.text);
+          } catch (err) {
+            alert('OCR Error: ' + err.message);
+          } finally {
+            this.isProcessing = false;
+            e.target.value = '';
+          }
+        },
+
+        async processPDF(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          this.isProcessing = true;
+          this.statusText = 'Extracting PDF text...';
+
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const content = await page.getTextContent();
+              fullText += content.items.map(it => it.str).join(' ') + '\n';
+            }
+            this.parseRawText(fullText);
+          } catch (err) {
+            alert('PDF parse error: ' + err.message);
+          } finally {
+            this.isProcessing = false;
+            e.target.value = '';
+          }
+        },
+
+        parseRawText(text) {
+          const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+          const extracted = [];
+          const dateMatch = text.match(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\b/);
+          let detectedDate = new Date().toISOString().split('T')[0];
+          if (dateMatch) {
+            const p = new Date(dateMatch[0].replace(/[\/]/g, '-'));
+            if (!isNaN(p)) detectedDate = p.toISOString().split('T')[0];
+          }
+
+          const priceRegex = /(?:₹|Rs\.?|INR)?\s*([0-9]+\.[0-9]{2}|[0-9]{2,5})\b/gi;
+          lines.forEach(line => {
+            if (/total|subtotal|cgst|sgst|gst|tax|balance/i.test(line)) return;
+            const matches = [...line.matchAll(priceRegex)];
+            if (matches.length > 0) {
+              const last = matches[matches.length - 1];
+              const price = parseFloat(last[1]);
+              let name = line.replace(last[0], '').replace(/[₹#*]/g, '').trim();
+              if (name.length > 2 && price > 0 && price < 100000) {
+                extracted.push({
+                  id: Math.random().toString(36).slice(2, 9),
+                  date: detectedDate,
+                  store: 'Scanned Store',
+                  name: name,
+                  quantity: 1,
+                  price: price,
+                  category: this.guessCategory(name)
+                });
+              }
+            }
+          });
+
+          this.stagedItems = extracted.length ? extracted : [
+            { id: Math.random().toString(36).slice(2, 9), date: detectedDate, store: 'Store', name: 'Item', quantity: 1, price: 0, category: 'Misc' }
+          ];
+        },
+
+        guessCategory(n) {
+          const s = n.toLowerCase();
+          if (/milk|bread|rice|atta|oil|vegetable|fruit|dal|curd|tea|egg/i.test(s)) return 'Groceries';
+          if (/hotel|restaurant|biryani|burger|pizza|cafe|snack/i.test(s)) return 'Dining';
+          if (/electric|water|gas|wifi|broadband|recharge|dth/i.test(s)) return 'Utilities';
+          if (/petrol|diesel|fuel|uber|ola|auto|metro|bus/i.test(s)) return 'Transport';
+          if (/mouse|keyboard|cable|charger|battery/i.test(s)) return 'Electronics';
+          return 'Misc';
+        },
+
+        quickAddPrompt() {
+          const name = prompt('Item name:');
+          if (!name) return;
+          const price = parseFloat(prompt('Price (₹):', '0')) || 0;
+          const qty = parseInt(prompt('Quantity:', '1'), 10) || 1;
+          const store = prompt('Store / Merchant:', 'Direct Purchase') || 'Direct Purchase';
+
+          const item = {
+            id: Math.random().toString(36).slice(2, 9),
+            date: new Date().toISOString().split('T')[0],
+            store: store,
+            name: name,
+            quantity: qty,
+            price: price,
+            category: this.guessCategory(name)
+          };
+          this.stagedItems.push(item);
+        },
+
+        applyPeriodFilter() {
+          const now = new Date();
+          const todayStr = now.toISOString().split('T')[0];
+
+          this.filteredLedger = this.ledger.filter(it => {
+            const itDate = new Date(it.date);
+            if (this.selectedPeriod === 'today') {
+              return it.date === todayStr;
+            } else if (this.selectedPeriod === 'week') {
+              const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+              return itDate >= weekAgo && itDate <= now;
+            } else if (this.selectedPeriod === 'this_month') {
+              return itDate.getMonth() === now.getMonth() && itDate.getFullYear() === now.getFullYear();
+            } else if (this.selectedPeriod === 'last_month') {
+              const lastM = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+              const lastY = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+              return itDate.getMonth() === lastM && itDate.getFullYear() === lastY;
+            } else if (this.selectedPeriod === 'custom') {
+              if (!this.customStart || !this.customEnd) return true;
+              return it.date >= this.customStart && it.date <= this.customEnd;
+            }
+            return true;
+          });
+        },
+
+        renderMonthlyChart() {
+          const monthBuckets = {};
+          const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          
+          this.ledger.forEach(it => {
+            const d = new Date(it.date);
+            if (!isNaN(d)) {
+              const key = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+              monthBuckets[key] = (monthBuckets[key] || 0) + Number(it.price);
+            }
+          });
+
+          const labels = Object.keys(monthBuckets);
+          const data = Object.values(monthBuckets);
+
+          const ctx = document.getElementById('monthlyChart');
+          if (!ctx) return;
+
+          if (this.chartInstance) {
+            this.chartInstance.destroy();
+          }
+
+          this.chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: labels.length ? labels : ['No Data'],
+              datasets: [{
+                label: 'Monthly Expenditure (₹)',
+                data: data.length ? data : [0],
+                backgroundColor: 'rgba(37, 99, 235, 0.85)',
+                hoverBackgroundColor: 'rgba(29, 78, 216, 1)',
+                borderRadius: 6
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: { grid: { color: 'rgba(0, 0, 0, 0.05)' }, ticks: { color: '#64748b' } },
+                x: { grid: { display: false }, ticks: { color: '#64748b' } }
+              }
+            }
+          });
+        },
+
+        get periodTotal() {
+          return this.filteredLedger.reduce((sum, it) => sum + Number(it.price || 0), 0);
+        },
+
+        get periodItemCount() {
+          return this.filteredLedger.reduce((sum, it) => sum + Number(it.quantity || 1), 0);
+        },
+
+        get topCategory() {
+          const map = {};
+          this.filteredLedger.forEach(it => {
+            map[it.category] = (map[it.category] || 0) + Number(it.price);
+          });
+          let maxCat = 'None', maxVal = 0;
+          for (let cat in map) {
+            if (map[cat] > maxVal) {
+              maxVal = map[cat];
+              maxCat = cat;
+            }
+          }
+          return maxCat;
+        }
+      };
+    }
+  </script>
+</body>
+</html>
